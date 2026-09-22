@@ -10,6 +10,14 @@ authors = ["Yang Zhang <wuyingfengsui@gmail.com>"]
 keywords = ["CoAP"]
 edition = "2021"
 
+[[example]]
+name = "edhoc_client"
+required-features = ["edhoc"]
+
+[[example]]
+name = "edhoc_server"
+required-features = ["edhoc", "router"]
+
 [dependencies]
 url = "^2.5"
 log = "^0.4"
@@ -73,7 +81,6 @@ router = [
     "dep:ciborium",
 ]
 edhoc = ["dep:lakers", "dep:lakers-crypto-rustcrypto", "dep:rand_core"]
-
 
 [dev-dependencies]
 quickcheck = "1.0"
