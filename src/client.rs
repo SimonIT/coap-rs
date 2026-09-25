@@ -1,6 +1,7 @@
 use crate::discovery::{parse_link_format, Link, WELL_KNOWN_CORE};
 #[cfg(feature = "dtls")]
 use crate::dtls::{DtlsConnection, UdpDtlsConfig};
+use crate::payload::{self, FromResponse, IntoPayload};
 use crate::request::RequestBuilder;
 use coap_lite::{
     block_handler::{extending_splice, BlockValue},
@@ -697,6 +698,43 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
         client.send(request).await
     }
 
+    /// Execute a single get request with a coap url and extract the response
+    pub async fn get_typed<R: FromResponse>(url: &str) -> IoResult<R> {
+        Self::request_typed(url, Method::Get, ()).await
+    }
+
+    /// Execute a single post request with a coap url using udp and extract the response
+    pub async fn post_typed<B: IntoPayload, R: FromResponse>(url: &str, body: B) -> IoResult<R> {
+        Self::request_typed(url, Method::Post, body).await
+    }
+
+    /// Execute a put request with a coap url using udp and extract the response
+    pub async fn put_typed<B: IntoPayload, R: FromResponse>(url: &str, body: B) -> IoResult<R> {
+        Self::request_typed(url, Method::Put, body).await
+    }
+
+    /// Execute a single delete request with a coap url using udp and extract the response
+    pub async fn delete_typed<R: FromResponse>(url: &str) -> IoResult<R> {
+        Self::request_typed(url, Method::Delete, ()).await
+    }
+
+    /// Execute a single request (GET, POST, PUT, DELETE) with a coap url using udp and extract
+    /// the response
+    pub async fn request_typed<B: IntoPayload, R: FromResponse>(
+        url: &str,
+        method: Method,
+        body: B,
+    ) -> IoResult<R> {
+        let (domain, port, path, queries) = Self::parse_coap_url(url)?;
+        let client = UdpCoAPClient::new((domain.as_str(), port)).await?;
+        let request = RequestBuilder::new(&path, method)
+            .queries(queries)
+            .domain(domain)
+            .body(body)?
+            .build();
+        client.send_typed(request).await
+    }
+
     /// Send a Request via the given transport, and receive a response.
     /// users are responsible for filling meaningful fields in the request
     /// this method supports blockwise requests
@@ -704,6 +742,17 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
         let first_response = self.send_request(&mut request).await?;
         request.response = Some(first_response);
         self.receive(&mut request).await
+    }
+
+    /// Send a Request via the given transport, and extract the response.
+    /// users are responsible for filling meaningful fields in the request
+    /// this method supports blockwise requests
+    pub async fn send_typed<R: FromResponse>(
+        &self,
+        mut request: CoapRequest<SocketAddr>,
+    ) -> IoResult<R> {
+        payload::set_accept::<R>(&mut request);
+        R::from_response(self.send(request).await?)
     }
 
     pub async fn observe<H: FnMut(IoResult<Message>) + Send + 'static>(

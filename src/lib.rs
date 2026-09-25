@@ -102,6 +102,7 @@ pub mod dtls;
 #[cfg(feature = "edhoc")]
 pub mod edhoc;
 mod observer;
+pub mod payload;
 pub mod request;
 #[cfg(feature = "router")]
 pub mod router;

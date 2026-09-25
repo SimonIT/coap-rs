@@ -618,6 +618,60 @@ pub mod test {
         );
     }
 
+    #[cfg(feature = "router")]
+    #[tokio::test]
+    async fn test_router_typed_client() {
+        use crate::router::{
+            extract::{Cbor, Json},
+            post, Router,
+        };
+        use crate::UdpCoAPClient;
+
+        let router = Router::<()>::new()
+            .route(
+                "/json",
+                post(
+                    |Json(values): Json<Vec<u32>>| async move { Json(values.iter().sum::<u32>()) },
+                ),
+            )
+            .route(
+                "/cbor",
+                post(|Cbor(text): Cbor<String>| async move { Cbor(text.to_uppercase()) }),
+            );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            tx.send(sock.local_addr().unwrap().port()).unwrap();
+            let listener = Box::new(UdpCoapListener::from_socket(sock));
+            Server::from_listeners(vec![listener])
+                .serve(router)
+                .await
+                .unwrap();
+        });
+        let port = rx.recv().await.unwrap();
+
+        let Json(sum): Json<u32> = UdpCoAPClient::post_typed(
+            &format!("coap://127.0.0.1:{port}/json"),
+            Json(vec![1, 2, 3]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sum, 6);
+
+        let Cbor(text): Cbor<String> = UdpCoAPClient::post_typed(
+            &format!("coap://127.0.0.1:{port}/cbor"),
+            Cbor("hello".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(text, "HELLO");
+
+        // Unknown routes produce an error status, which is reported as an error.
+        let result: io::Result<Json<u32>> =
+            UdpCoAPClient::get_typed(&format!("coap://127.0.0.1:{port}/missing")).await;
+        assert!(result.is_err());
+    }
+
     #[tokio::test]
     async fn test_echo_server() {
         let server_port = spawn_server("127.0.0.1:0", request_handler)

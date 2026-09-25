@@ -1,4 +1,7 @@
+use crate::payload::IntoPayload;
+use coap_lite::option_value::OptionValueU16;
 use std::{
+    io::Result as IoResult,
     net::{IpAddr, SocketAddr},
     str::FromStr,
 };
@@ -55,6 +58,18 @@ impl<'a> RequestBuilder<'a> {
     pub fn data(mut self, data: Option<Vec<u8>>) -> Self {
         self.data = data;
         self
+    }
+    /// Set the payload and content format of the request.
+    pub fn body<B: IntoPayload>(mut self, body: B) -> IoResult<Self> {
+        if let Some(content_format) = body.content_format() {
+            let content_format = u16::try_from(usize::from(content_format)).unwrap();
+            self.options.push((
+                CoapOption::ContentFormat,
+                OptionValueU16(content_format).into(),
+            ));
+        }
+        self.data = Some(body.into_payload()?);
+        Ok(self)
     }
     /// set the queries of the request.
     pub fn queries(mut self, queries: Vec<Vec<u8>>) -> Self {

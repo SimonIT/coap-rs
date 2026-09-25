@@ -737,7 +737,10 @@ mod test {
         let client = UdpCoAPClient::new(format!("127.0.0.1:{}", server_port))
             .await
             .unwrap();
-        let error = client.observe(path, |_: std::io::Result<Packet>| {}).await.unwrap_err();
+        let error = client
+            .observe(path, |_: std::io::Result<Packet>| {})
+            .await
+            .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::NotFound);
     }
 

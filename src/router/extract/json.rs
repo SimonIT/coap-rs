@@ -1,11 +1,14 @@
 //! Extractors for request JSON body data.
 
+use crate::payload::{error_for_status, FromResponse, IntoPayload};
 use crate::router::{
     extract::FromRequest,
     request::Request,
     response::{IntoResponse, Response, StatusCode},
 };
+use coap_lite::{CoapResponse, ContentFormat};
 use serde::{de::DeserializeOwned, Serialize};
+use std::io::{Error, ErrorKind, Result as IoResult};
 use std::ops::Deref;
 
 /// Error types that can occur when extracting data from the request JSON body.
@@ -69,6 +72,32 @@ impl<T: Serialize> IntoResponse for Json<T> {
                 .set_status_code(StatusCode::InternalServerError)
                 .set_payload(b"Failed to serialize response body".to_vec()),
         }
+    }
+}
+
+impl<T: Serialize> IntoPayload for Json<T> {
+    fn content_format(&self) -> Option<ContentFormat> {
+        Some(ContentFormat::ApplicationJSON)
+    }
+
+    fn into_payload(self) -> IoResult<Vec<u8>> {
+        // Serialize the inner value to JSON bytes
+        serde_json::to_vec(&self.0).map_err(|e| Error::new(ErrorKind::InvalidInput, e))
+    }
+}
+
+impl<T: DeserializeOwned> FromResponse for Json<T> {
+    fn accept() -> Option<ContentFormat> {
+        Some(ContentFormat::ApplicationJSON)
+    }
+
+    fn from_response(response: CoapResponse) -> IoResult<Self> {
+        error_for_status(&response)?;
+
+        // Deserialize JSON payload into type T
+        serde_json::from_slice(&response.message.payload)
+            .map(Json)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))
     }
 }
 
