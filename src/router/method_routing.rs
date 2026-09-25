@@ -16,6 +16,8 @@ pub struct MethodRouter<S> {
     put: Option<BoxedHandler<S>>,
     /// Optional fallback handler that is called when no method-specific handler matches.
     fallback: Option<BoxedHandler<S>>,
+    /// Link attributes advertised for this route by resource discovery.
+    link_attributes: Vec<(String, String)>,
 }
 
 impl<S: Clone + Send + Sync + 'static> MethodRouter<S> {
@@ -86,6 +88,20 @@ impl<S: Clone + Send + Sync + 'static> MethodRouter<S> {
         }
     }
 
+    /// Adds a link attribute to this method router that is advertised by resource discovery.
+    ///
+    /// An empty value adds an attribute without a value (e.g. `obs`).
+    pub fn link_attribute(mut self, key: impl ToString, value: impl ToString) -> Self {
+        self.link_attributes
+            .push((key.to_string(), value.to_string()));
+        self
+    }
+
+    /// Returns the link attributes advertised for this route by resource discovery.
+    pub fn link_attributes(&self) -> &[(String, String)] {
+        &self.link_attributes
+    }
+
     /// Tries to handle the given request using the handler for its method, if it exists.
     /// If the handler returns an error, the fallback handler will be tried if it exists.
     /// If no handler matches, the request is returned as an error.
@@ -121,6 +137,7 @@ where
         post: None,
         put: None,
         fallback: None,
+        link_attributes: Vec::new(),
     }
 }
 
@@ -138,6 +155,7 @@ where
         post: None,
         put: None,
         fallback: None,
+        link_attributes: Vec::new(),
     }
 }
 
@@ -155,6 +173,7 @@ where
         post: Some(handler),
         put: None,
         fallback: None,
+        link_attributes: Vec::new(),
     }
 }
 
@@ -172,6 +191,7 @@ where
         post: None,
         put: Some(handler),
         fallback: None,
+        link_attributes: Vec::new(),
     }
 }
 
@@ -189,5 +209,6 @@ where
         post: None,
         put: None,
         fallback: Some(handler),
+        link_attributes: Vec::new(),
     }
 }

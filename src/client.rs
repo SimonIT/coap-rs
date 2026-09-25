@@ -1,3 +1,4 @@
+use crate::discovery::{parse_link_format, Link, WELL_KNOWN_CORE};
 #[cfg(feature = "dtls")]
 use crate::dtls::{DtlsConnection, UdpDtlsConfig};
 use crate::request::RequestBuilder;
@@ -626,6 +627,21 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
         Self::request_with_timeout(url, Method::Delete, None, timeout).await
     }
 
+    /// Execute a single discovery request to `/.well-known/core` with a coap url using udp
+    pub async fn discover(url: &str) -> IoResult<Vec<Link>> {
+        let response = Self::request(&Self::discovery_url(url)?, Method::Get, None).await?;
+        Self::parse_discovery_response(response)
+    }
+
+    /// Execute a single discovery request to `/.well-known/core` with a coap url and a specific
+    /// timeout using udp
+    pub async fn discover_with_timeout(url: &str, timeout: Duration) -> IoResult<Vec<Link>> {
+        let response =
+            Self::request_with_timeout(&Self::discovery_url(url)?, Method::Get, None, timeout)
+                .await?;
+        Self::parse_discovery_response(response)
+    }
+
     /// Execute a single request (GET, POST, PUT, DELETE) with a coap url using udp
     pub async fn request(
         url: &str,
@@ -873,10 +889,7 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
                             .add_option_as::<BlockValue>(CoapOption::Block2, next_block2);
 
                         let full_datagram = self
-                            .receive_with_etag_validation(
-                                request,
-                                expected_etag.as_deref(),
-                            )
+                            .receive_with_etag_validation(request, expected_etag.as_deref())
                             .await;
 
                         match full_datagram {
@@ -1125,6 +1138,26 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
         Ok((host.to_string(), port, path, queries))
     }
 
+    fn discovery_url(url: &str) -> IoResult<String> {
+        let mut url_params = match Url::parse(url) {
+            Ok(url_params) => url_params,
+            Err(_) => return Err(Error::new(ErrorKind::InvalidInput, "url error")),
+        };
+        url_params.set_path(WELL_KNOWN_CORE);
+        Ok(url_params.to_string())
+    }
+
+    fn parse_discovery_response(response: CoapResponse) -> IoResult<Vec<Link>> {
+        let status = *response.get_status();
+        if status != ResponseType::Content {
+            return Err(Error::other(format!("discovery error: {:?}", status)));
+        }
+        let payload = String::from_utf8(response.message.payload)
+            .map_err(|_| Error::new(ErrorKind::InvalidData, "invalid utf-8 in link format"))?;
+        parse_link_format(&payload)
+            .map_err(|_| Error::new(ErrorKind::InvalidData, "link format error"))
+    }
+
     fn gen_message_id(&self) -> u16 {
         self.message_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -1280,6 +1313,40 @@ mod test {
         } else {
             error!("Parse Queries failed");
         }
+    }
+
+    #[test]
+    fn test_discovery_url() {
+        assert_eq!(
+            UdpCoAPClient::discovery_url("coap://127.0.0.1:5683").unwrap(),
+            "coap://127.0.0.1:5683/.well-known/core"
+        );
+        assert_eq!(
+            UdpCoAPClient::discovery_url("coap://127.0.0.1:5683/hello?rt=temperature").unwrap(),
+            "coap://127.0.0.1:5683/.well-known/core?rt=temperature"
+        );
+        assert!(UdpCoAPClient::discovery_url("127.0.0.1").is_err());
+    }
+
+    #[test]
+    fn test_parse_discovery_response() {
+        let mut response = CoapResponse::new(&Message::new()).unwrap();
+        response.set_status(ResponseType::Content);
+        response.message.payload = b"</hello>;rt=test".to_vec();
+        let links = UdpCoAPClient::parse_discovery_response(response.clone()).unwrap();
+        assert_eq!(links, vec![Link::new("/hello").attribute("rt", "test")]);
+
+        response.message.payload = vec![0xff];
+        let error = UdpCoAPClient::parse_discovery_response(response.clone()).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+
+        response.message.payload = b"hello".to_vec();
+        let error = UdpCoAPClient::parse_discovery_response(response.clone()).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+
+        response.set_status(ResponseType::NotFound);
+        let error = UdpCoAPClient::parse_discovery_response(response).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Other);
     }
 
     #[tokio::test]
@@ -1710,7 +1777,10 @@ mod test {
         request.set_method(Method::Get);
 
         // Act
-        let terminator = client.observe_with(request, |_: IoResult<Message>| {}).await.unwrap();
+        let terminator = client
+            .observe_with(request, |_: IoResult<Message>| {})
+            .await
+            .unwrap();
         let _ = terminator.send(ObserveMessage::Terminate);
 
         // Assert: wait for the server to receive the deregister and report the result
@@ -2271,7 +2341,7 @@ mod test {
             "Expected error for invalid observe registration"
         );
     }
-    
+
     #[test]
     fn test_handle_blockwise_rejects_mismatched_block_number() {
         // Arrange: build a request whose response carries Block2 num=5
@@ -2290,8 +2360,7 @@ mod test {
         };
 
         // Act
-        let result =
-            CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
+        let result = CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
 
         // Assert
         assert!(result.is_err(), "Expected block number mismatch error");
@@ -2320,8 +2389,7 @@ mod test {
         };
 
         // Act
-        let result =
-            CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
+        let result = CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
 
         // Assert: should succeed and indicate more blocks
         assert!(result.is_ok());
@@ -2344,8 +2412,7 @@ mod test {
         let mut state = BlockState::default();
 
         // Act
-        let result =
-            CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
+        let result = CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
 
         // Assert: no mismatch error; state should now expect block 1
         assert!(result.is_ok());
@@ -2367,8 +2434,7 @@ mod test {
                     match (path.as_str(), has_observe, maybe_block2) {
                         ("bad_block", true, None) => {
                             // First observe notification: block 0 with more=true
-                            resp.message.header.code =
-                                MessageClass::Response(Status::Content);
+                            resp.message.header.code = MessageClass::Response(Status::Content);
                             let block = BlockValue::new(0, true, 1024).unwrap();
                             resp.message
                                 .add_option_as::<BlockValue>(CoapOption::Block2, block);
@@ -2376,16 +2442,14 @@ mod test {
                         }
                         ("bad_block", _, Some(_block2)) => {
                             // Client requests block 1, but we reply with block 99
-                            resp.message.header.code =
-                                MessageClass::Response(Status::Content);
+                            resp.message.header.code = MessageClass::Response(Status::Content);
                             let wrong_block = BlockValue::new(99, false, 1024).unwrap();
                             resp.message
                                 .add_option_as::<BlockValue>(CoapOption::Block2, wrong_block);
                             resp.message.payload = vec![b'z'; 1024];
                         }
                         _ => {
-                            resp.message.header.code =
-                                MessageClass::Response(Status::NotFound);
+                            resp.message.header.code = MessageClass::Response(Status::NotFound);
                         }
                     }
                 }
@@ -2467,7 +2531,9 @@ mod test {
                 .ok_or_else(|| Error::other("scripted peer exhausted"))?;
             let n = bytes.len();
             if n > buf.len() {
-                return Err(Error::other("scripted peer response exceeds receive buffer"));
+                return Err(Error::other(
+                    "scripted peer response exceeds receive buffer",
+                ));
             }
             buf[..n].copy_from_slice(&bytes);
             Ok((n, None))

@@ -8,6 +8,7 @@
 //! - CoAP Observe option [RFC 7641](https://tools.ietf.org/rfc/rfc7641.txt)
 //! - *Too Many Requests* Response Code [RFC 8516](https://tools.ietf.org/html/rfc8516)
 //! - Block-Wise Transfers [RFC 7959](https://tools.ietf.org/html/rfc7959)
+//! - CoRE Resource Discovery [RFC 6690](https://tools.ietf.org/html/rfc6690)
 //! - DTLS support via [webrtc-rs](https://github.com/webrtc-rs/webrtc)
 //! - Option to provide custom transports for client and server
 //! - Client can perform multiple concurrent requests, like observing and sending requests using
@@ -94,6 +95,7 @@ pub use self::client::UdpCoAPClient;
 pub use self::observer::Observer;
 pub use self::server::Server;
 pub mod client;
+pub mod discovery;
 #[cfg(feature = "dtls")]
 pub mod dtls;
 mod observer;
