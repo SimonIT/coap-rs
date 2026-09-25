@@ -97,6 +97,7 @@ pub mod client;
 #[cfg(feature = "dtls")]
 pub mod dtls;
 mod observer;
+pub mod payload;
 pub mod request;
 #[cfg(feature = "router")]
 pub mod router;

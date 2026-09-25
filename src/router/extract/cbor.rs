@@ -1,11 +1,14 @@
 //! Extractors for request CBOR body data.
 
+use crate::payload::{error_for_status, FromResponse, IntoPayload};
 use crate::router::{
     extract::FromRequest,
     request::Request,
     response::{IntoResponse, Response, StatusCode},
 };
+use coap_lite::{CoapResponse, ContentFormat};
 use serde::{de::DeserializeOwned, Serialize};
+use std::io::{Error, ErrorKind, Result as IoResult};
 use std::ops::Deref;
 
 /// Error types that can occur when extracting data from the request CBOR body.
@@ -64,6 +67,35 @@ impl<T: Serialize> IntoResponse for Cbor<T> {
                 .set_status_code(StatusCode::InternalServerError)
                 .set_payload(b"Failed to serialize response body".to_vec()),
         }
+    }
+}
+
+impl<T: Serialize> IntoPayload for Cbor<T> {
+    fn content_format(&self) -> Option<ContentFormat> {
+        Some(ContentFormat::ApplicationCBOR)
+    }
+
+    fn into_payload(self) -> IoResult<Vec<u8>> {
+        // Serialize the inner value to CBOR
+        let mut cbor_vec = Vec::new();
+        ciborium::into_writer(&self.0, &mut cbor_vec)
+            .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
+        Ok(cbor_vec)
+    }
+}
+
+impl<T: DeserializeOwned> FromResponse for Cbor<T> {
+    fn accept() -> Option<ContentFormat> {
+        Some(ContentFormat::ApplicationCBOR)
+    }
+
+    fn from_response(response: CoapResponse) -> IoResult<Self> {
+        error_for_status(&response)?;
+
+        // Deserialize CBOR payload into type T
+        ciborium::from_reader(response.message.payload.as_slice())
+            .map(Cbor)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))
     }
 }
 

@@ -1,5 +1,6 @@
 #[cfg(feature = "dtls")]
 use crate::dtls::{DtlsConnection, UdpDtlsConfig};
+use crate::payload::{self, FromResponse, IntoPayload};
 use crate::request::RequestBuilder;
 use coap_lite::{
     block_handler::{extending_splice, BlockValue},
@@ -662,6 +663,43 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
         client.send(request).await
     }
 
+    /// Execute a single get request with a coap url and extract the response
+    pub async fn get_typed<R: FromResponse>(url: &str) -> IoResult<R> {
+        Self::request_typed(url, Method::Get, ()).await
+    }
+
+    /// Execute a single post request with a coap url using udp and extract the response
+    pub async fn post_typed<B: IntoPayload, R: FromResponse>(url: &str, body: B) -> IoResult<R> {
+        Self::request_typed(url, Method::Post, body).await
+    }
+
+    /// Execute a put request with a coap url using udp and extract the response
+    pub async fn put_typed<B: IntoPayload, R: FromResponse>(url: &str, body: B) -> IoResult<R> {
+        Self::request_typed(url, Method::Put, body).await
+    }
+
+    /// Execute a single delete request with a coap url using udp and extract the response
+    pub async fn delete_typed<R: FromResponse>(url: &str) -> IoResult<R> {
+        Self::request_typed(url, Method::Delete, ()).await
+    }
+
+    /// Execute a single request (GET, POST, PUT, DELETE) with a coap url using udp and extract
+    /// the response
+    pub async fn request_typed<B: IntoPayload, R: FromResponse>(
+        url: &str,
+        method: Method,
+        body: B,
+    ) -> IoResult<R> {
+        let (domain, port, path, queries) = Self::parse_coap_url(url)?;
+        let client = UdpCoAPClient::new((domain.as_str(), port)).await?;
+        let request = RequestBuilder::new(&path, method)
+            .queries(queries)
+            .domain(domain)
+            .body(body)?
+            .build();
+        client.send_typed(request).await
+    }
+
     /// Send a Request via the given transport, and receive a response.
     /// users are responsible for filling meaningful fields in the request
     /// this method supports blockwise requests
@@ -669,6 +707,17 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
         let first_response = self.send_request(&mut request).await?;
         request.response = Some(first_response);
         self.receive(&mut request).await
+    }
+
+    /// Send a Request via the given transport, and extract the response.
+    /// users are responsible for filling meaningful fields in the request
+    /// this method supports blockwise requests
+    pub async fn send_typed<R: FromResponse>(
+        &self,
+        mut request: CoapRequest<SocketAddr>,
+    ) -> IoResult<R> {
+        payload::set_accept::<R>(&mut request);
+        R::from_response(self.send(request).await?)
     }
 
     pub async fn observe<H: FnMut(IoResult<Message>) + Send + 'static>(
@@ -873,10 +922,7 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
                             .add_option_as::<BlockValue>(CoapOption::Block2, next_block2);
 
                         let full_datagram = self
-                            .receive_with_etag_validation(
-                                request,
-                                expected_etag.as_deref(),
-                            )
+                            .receive_with_etag_validation(request, expected_etag.as_deref())
                             .await;
 
                         match full_datagram {
@@ -1710,7 +1756,10 @@ mod test {
         request.set_method(Method::Get);
 
         // Act
-        let terminator = client.observe_with(request, |_: IoResult<Message>| {}).await.unwrap();
+        let terminator = client
+            .observe_with(request, |_: IoResult<Message>| {})
+            .await
+            .unwrap();
         let _ = terminator.send(ObserveMessage::Terminate);
 
         // Assert: wait for the server to receive the deregister and report the result
@@ -2271,7 +2320,7 @@ mod test {
             "Expected error for invalid observe registration"
         );
     }
-    
+
     #[test]
     fn test_handle_blockwise_rejects_mismatched_block_number() {
         // Arrange: build a request whose response carries Block2 num=5
@@ -2290,8 +2339,7 @@ mod test {
         };
 
         // Act
-        let result =
-            CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
+        let result = CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
 
         // Assert
         assert!(result.is_err(), "Expected block number mismatch error");
@@ -2320,8 +2368,7 @@ mod test {
         };
 
         // Act
-        let result =
-            CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
+        let result = CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
 
         // Assert: should succeed and indicate more blocks
         assert!(result.is_ok());
@@ -2344,8 +2391,7 @@ mod test {
         let mut state = BlockState::default();
 
         // Act
-        let result =
-            CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
+        let result = CoAPClient::<UdpTransport>::handle_blockwise(&mut request, &mut state);
 
         // Assert: no mismatch error; state should now expect block 1
         assert!(result.is_ok());
@@ -2367,8 +2413,7 @@ mod test {
                     match (path.as_str(), has_observe, maybe_block2) {
                         ("bad_block", true, None) => {
                             // First observe notification: block 0 with more=true
-                            resp.message.header.code =
-                                MessageClass::Response(Status::Content);
+                            resp.message.header.code = MessageClass::Response(Status::Content);
                             let block = BlockValue::new(0, true, 1024).unwrap();
                             resp.message
                                 .add_option_as::<BlockValue>(CoapOption::Block2, block);
@@ -2376,16 +2421,14 @@ mod test {
                         }
                         ("bad_block", _, Some(_block2)) => {
                             // Client requests block 1, but we reply with block 99
-                            resp.message.header.code =
-                                MessageClass::Response(Status::Content);
+                            resp.message.header.code = MessageClass::Response(Status::Content);
                             let wrong_block = BlockValue::new(99, false, 1024).unwrap();
                             resp.message
                                 .add_option_as::<BlockValue>(CoapOption::Block2, wrong_block);
                             resp.message.payload = vec![b'z'; 1024];
                         }
                         _ => {
-                            resp.message.header.code =
-                                MessageClass::Response(Status::NotFound);
+                            resp.message.header.code = MessageClass::Response(Status::NotFound);
                         }
                     }
                 }
@@ -2467,7 +2510,9 @@ mod test {
                 .ok_or_else(|| Error::other("scripted peer exhausted"))?;
             let n = bytes.len();
             if n > buf.len() {
-                return Err(Error::other("scripted peer response exceeds receive buffer"));
+                return Err(Error::other(
+                    "scripted peer response exceeds receive buffer",
+                ));
             }
             buf[..n].copy_from_slice(&bytes);
             Ok((n, None))
