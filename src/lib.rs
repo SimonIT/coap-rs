@@ -9,7 +9,7 @@
 //! - *Too Many Requests* Response Code [RFC 8516](https://tools.ietf.org/html/rfc8516)
 //! - Block-Wise Transfers [RFC 7959](https://tools.ietf.org/html/rfc7959)
 //! - DTLS support via [webrtc-rs](https://github.com/webrtc-rs/webrtc)
-//! - EDHOC key exchange ([RFC 9528](https://tools.ietf.org/html/rfc9528)) via [lakers](https://github.com/openwsn-berkeley/lakers)
+//! - EDHOC key exchange [RFC 9528](https://tools.ietf.org/html/rfc9528) via [lakers](https://github.com/openwsn-berkeley/lakers)
 //! - Option to provide custom transports for client and server
 //! - Client can perform multiple concurrent requests, like observing and sending requests using
 //!   the same underlying socket

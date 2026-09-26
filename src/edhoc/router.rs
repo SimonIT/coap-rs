@@ -4,9 +4,12 @@
 
 use std::sync::Arc;
 
-use super::{process_edhoc_message, EdhocCredentialStore, EdhocResponderStore, EdhocSessionHook};
+use super::{
+    content_format_option, process_edhoc_message, EdhocCredentialStore, EdhocResponderStore,
+    EdhocSessionHook, CONTENT_FORMAT_EDHOC_CBOR_SEQ,
+};
 use crate::router::{
-    extract::{FromRequest, State},
+    extract::{FromRef, FromRequest, State},
     method_routing::{post, MethodRouter},
     request::Request,
     response::{IntoResponse, Response, StatusCode},
@@ -54,11 +57,20 @@ impl<S: Sync> FromRequest<S> for PeerAddr {
     }
 }
 
+/// Builds a response carrying an EDHOC payload (`message_2`, `message_4` or an EDHOC error
+/// message), all of which use the `application/edhoc+cbor-seq` Content-Format.
+fn edhoc_response(status: StatusCode, payload: Vec<u8>) -> Response {
+    let (option, value) = content_format_option(CONTENT_FORMAT_EDHOC_CBOR_SEQ);
+    Response::new()
+        .set_status_code(status)
+        .set_payload(payload)
+        .add_option(option, value)
+}
+
 impl IntoResponse for super::EdhocError {
     fn into_response(self) -> Response {
-        Response::new()
-            .set_status_code(StatusCode::BadRequest)
-            .set_payload(self.to_string().into_bytes())
+        let (status, payload) = self.to_error_message();
+        edhoc_response(status, payload)
     }
 }
 
@@ -78,15 +90,21 @@ pub async fn edhoc_route_handler(
     )
     .await
     {
-        Ok(payload) => Response::new()
-            .set_status_code(StatusCode::Changed)
-            .set_payload(payload),
+        Ok(payload) => edhoc_response(StatusCode::Changed, payload),
         Err(err) => err.into_response(),
     }
 }
 
 /// A ready-to-mount `MethodRouter` handling POST requests at `EDHOC_WELL_KNOWN_PATH`. Shorthand
 /// for `post(edhoc_route_handler)`.
-pub fn edhoc_route() -> MethodRouter<EdhocRouterState> {
+///
+/// Works with any router state `S` that `EdhocRouterState` can be extracted from, i.e. both a
+/// `Router<EdhocRouterState>` and a router with an application state implementing
+/// `FromRef<_>` for `EdhocRouterState`.
+pub fn edhoc_route<S>() -> MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+    EdhocRouterState: FromRef<S>,
+{
     post(edhoc_route_handler)
 }
