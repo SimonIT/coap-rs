@@ -84,7 +84,7 @@ impl<S: Clone + Send + Sync + 'static> Router<S> {
         self
     }
 
-    /// Disables resource discovery at `/.well-known/core`.
+    /// Disables resource discovery at `/.well-known/core` if `value` is `true`.
     ///
     /// Resource discovery is enabled by default and is only used when no registered route matches.
     pub fn disable_discovery(self, value: bool) -> Self {
@@ -369,7 +369,7 @@ pub(crate) mod test_utils {
                     .get(get_state)
                     .fallback(route_fallback_handler)
                     .link_attribute(LINK_ATTR_RESOURCE_TYPE, "state")
-                    .link_attribute(LINK_ATTR_OBSERVABLE, ""),
+                    .link_flag(LINK_ATTR_OBSERVABLE),
             )
             .route(
                 "/state/property/{key}",
@@ -609,9 +609,7 @@ mod tests {
         assert_eq!(
             links,
             vec![
-                Link::new("/state")
-                    .attribute("rt", "state")
-                    .attribute("obs", ""),
+                Link::new("/state").attribute("rt", "state").flag("obs"),
                 Link::new("/property")
                     .attribute("rt", "property")
                     .attribute("if", "core.p"),
@@ -662,6 +660,13 @@ mod tests {
         let links = links.unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].href, "/state");
+
+        // Filter resources with a percent-encoded query
+        let links = Client::discover(&format!("coap://{}?if=core%2Ep", addr)).await;
+        assert!(links.is_ok());
+        let links = links.unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].href, "/property");
 
         // Filter resources without match
         let links = Client::discover(&format!("coap://{}?rt=unknown", addr)).await;

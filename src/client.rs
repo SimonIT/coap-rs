@@ -5,13 +5,16 @@ use crate::request::RequestBuilder;
 use coap_lite::{
     block_handler::{extending_splice, BlockValue},
     error::HandlingError,
-    CoapOption, CoapRequest, CoapResponse, MessageClass, MessageType, ObserveOption,
+    option_value::OptionValueU16,
+    CoapOption, CoapRequest, CoapResponse, ContentFormat, MessageClass, MessageType, ObserveOption,
     Packet as Message, RequestType as Method, ResponseType,
 };
 use core::mem;
 
 use futures::Future;
 use log::*;
+
+use percent_encoding::percent_decode_str;
 
 use regex::Regex;
 use std::{
@@ -1132,7 +1135,11 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
 
         let queries = url_params
             .query()
-            .map(|q| q.split("&").map(|qi| qi.as_bytes().to_vec()).collect())
+            .map(|q| {
+                q.split("&")
+                    .map(|qi| percent_decode_str(qi).collect())
+                    .collect()
+            })
             .unwrap_or(vec![]);
 
         Ok((host.to_string(), port, path, queries))
@@ -1151,6 +1158,21 @@ impl<T: ClientTransport + 'static> CoAPClient<T> {
         let status = *response.get_status();
         if status != ResponseType::Content {
             return Err(Error::other(format!("discovery error: {:?}", status)));
+        }
+        // Tolerate servers that omit the content format, but reject any other representation
+        let link_format = usize::from(ContentFormat::ApplicationLinkFormat);
+        if let Some(content_format) = response
+            .message
+            .get_first_option_as::<OptionValueU16>(CoapOption::ContentFormat)
+        {
+            let content_format = content_format
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "invalid content format"))?;
+            if usize::from(content_format.0) != link_format {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("unexpected content format: {}", content_format.0),
+                ));
+            }
         }
         let payload = String::from_utf8(response.message.payload)
             .map_err(|_| Error::new(ErrorKind::InvalidData, "invalid utf-8 in link format"))?;
@@ -1316,6 +1338,20 @@ mod test {
     }
 
     #[test]
+    fn test_parse_percent_encoded_queries() {
+        let (_, _, _, queries) =
+            UdpCoAPClient::parse_coap_url("coap://127.0.0.1/?title=Outdoor%20sensor&a%26b=c%3Dd")
+                .unwrap();
+        assert_eq!(
+            vec![
+                "title=Outdoor sensor".as_bytes().to_vec(),
+                "a&b=c=d".as_bytes().to_vec()
+            ],
+            queries
+        );
+    }
+
+    #[test]
     fn test_discovery_url() {
         assert_eq!(
             UdpCoAPClient::discovery_url("coap://127.0.0.1:5683").unwrap(),
@@ -1328,6 +1364,16 @@ mod test {
         assert!(UdpCoAPClient::discovery_url("127.0.0.1").is_err());
     }
 
+    #[tokio::test]
+    async fn test_discover_invalid_url() {
+        let error = UdpCoAPClient::discover("127.0.0.1").await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+        let error = UdpCoAPClient::discover_with_timeout("127.0.0.1", Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    }
+
     #[test]
     fn test_parse_discovery_response() {
         let mut response = CoapResponse::new(&Message::new()).unwrap();
@@ -1335,6 +1381,34 @@ mod test {
         response.message.payload = b"</hello>;rt=test".to_vec();
         let links = UdpCoAPClient::parse_discovery_response(response.clone()).unwrap();
         assert_eq!(links, vec![Link::new("/hello").attribute("rt", "test")]);
+
+        response
+            .message
+            .set_content_format(ContentFormat::ApplicationLinkFormat);
+        let links = UdpCoAPClient::parse_discovery_response(response.clone()).unwrap();
+        assert_eq!(links, vec![Link::new("/hello").attribute("rt", "test")]);
+
+        let mut text_response = response.clone();
+        text_response
+            .message
+            .clear_option(CoapOption::ContentFormat);
+        text_response
+            .message
+            .set_content_format(ContentFormat::TextPlain);
+        let error = UdpCoAPClient::parse_discovery_response(text_response).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), "unexpected content format: 0");
+
+        let mut invalid_response = response.clone();
+        invalid_response
+            .message
+            .clear_option(CoapOption::ContentFormat);
+        invalid_response
+            .message
+            .add_option(CoapOption::ContentFormat, vec![0, 0, 40]);
+        let error = UdpCoAPClient::parse_discovery_response(invalid_response).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), "invalid content format");
 
         response.message.payload = vec![0xff];
         let error = UdpCoAPClient::parse_discovery_response(response.clone()).unwrap_err();
